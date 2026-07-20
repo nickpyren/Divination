@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Web;
@@ -13,6 +13,7 @@ using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Plugin;
+using Divination.TwitterIntegration.Credentials;
 
 namespace Divination.TwitterIntegration;
 
@@ -24,8 +25,11 @@ public class TwitterIntegration : DivinationPlugin<TwitterIntegration, PluginCon
     public TwitterIntegration(IDalamudPluginInterface pluginInterface) : base(pluginInterface)
     {
         Config = pluginInterface.GetPluginConfig() as PluginConfig ?? new PluginConfig();
+        CredentialStore = new WindowsCredentialStore();
         Task.Run(WatchTimeline);
     }
+
+    internal ICredentialStore CredentialStore { get; }
 
     private Tokens? twitter;
     public static Tokens? Twitter
@@ -37,18 +41,42 @@ public class TwitterIntegration : DivinationPlugin<TwitterIntegration, PluginCon
         }
     }
 
+    internal void InvalidateTwitterClient()
+    {
+        twitter = null;
+    }
+
+    internal string? ReadCredential(string key)
+    {
+        return CredentialStore.Read(key);
+    }
+
+    internal void WriteCredential(string key, string value)
+    {
+        CredentialStore.Write(key, value);
+        InvalidateTwitterClient();
+    }
+
+    internal void DeleteCredential(string key)
+    {
+        CredentialStore.Delete(key);
+        InvalidateTwitterClient();
+    }
+
     private static Tokens? CreateTokens()
     {
-        if (string.IsNullOrEmpty(Instance.Config.ConsumerKey) || string.IsNullOrEmpty(Instance.Config.ConsumerSecret) ||
-            string.IsNullOrEmpty(Instance.Config.AccessToken) || string.IsNullOrEmpty(Instance.Config.AccessTokenSecret))
+        var consumerKey = Instance.CredentialStore.Read(TwitterCredentialKeys.ConsumerKey);
+        var consumerSecret = Instance.CredentialStore.Read(TwitterCredentialKeys.ConsumerSecret);
+        var accessToken = Instance.CredentialStore.Read(TwitterCredentialKeys.AccessToken);
+        var accessTokenSecret = Instance.CredentialStore.Read(TwitterCredentialKeys.AccessTokenSecret);
+
+        if (string.IsNullOrEmpty(consumerKey) || string.IsNullOrEmpty(consumerSecret) ||
+            string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(accessTokenSecret))
         {
             return null;
         }
 
-        return Tokens.Create(Instance.Config.ConsumerKey,
-            Instance.Config.ConsumerSecret,
-            Instance.Config.AccessToken,
-            Instance.Config.AccessTokenSecret);
+        return Tokens.Create(consumerKey, consumerSecret, accessToken, accessTokenSecret);
     }
 
     public string MainCommandPrefix => "/twitter";
@@ -62,13 +90,14 @@ public class TwitterIntegration : DivinationPlugin<TwitterIntegration, PluginCon
     [CommandHelp("与えられた <text...> をツイートします。")]
     private void OnTweetCommand(CommandContext context)
     {
-        if (twitter == null)
+        var client = Twitter;
+        if (client == null)
         {
             Divination.Chat.PrintError("Twitter API の資格情報が設定されていません。");
             return;
         }
 
-        twitter.Statuses.UpdateAsync(context["text"])
+        client.Statuses.UpdateAsync(context["text"])
             .ContinueWith(completed =>
             {
                 if (completed.IsCompleted)
